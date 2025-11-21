@@ -1,4 +1,4 @@
-season_year,team_id,team_code,team_name_en,team_name_es,country_en,country_es,matches,wins,draws,losses
+season_year,team_id,team_code,team_name_en,team_name_es,country_en,country_es,key__matches_appearance,key__matches_win,key__matches_draw,key__matches_loss
 1992,50058,MIL,Milan,Milan,Italy,Italia,11,10,0,1
 1992,52748,MAR,Marseille,Marseille,France,Francia,11,7,4,0
 1992,50121,RAN,Rangers,Rangers,Scotland,Escocia,10,6,4,0
