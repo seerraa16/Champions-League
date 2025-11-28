@@ -4,6 +4,7 @@ import time
 import re
 import warnings
 import os
+from io import StringIO  # para evitar el FutureWarning de read_html
 
 warnings.filterwarnings(
     "ignore",
@@ -59,7 +60,6 @@ def clean_score(score_str):
 def looks_like_match_table(df: pd.DataFrame) -> bool:
     """
     Heurística para decidir si una tabla parece de partidos.
-    Buscamos columnas tipo 'Home team', 'Away team', 'Score', 'Result', 'Team 1', 'Team 2'.
     """
     cols = [str(c).lower() for c in df.columns]
 
@@ -77,7 +77,7 @@ def looks_like_match_table(df: pd.DataFrame) -> bool:
 def normalize_match_table(df: pd.DataFrame, season_label: str, stage_hint: str = None) -> pd.DataFrame:
     """
     Normaliza una tabla de partidos a columnas estándar:
-    season, stage, date, home_team, away_team, score, home_goals, away_goals, extra_time, penalties
+    Season, Stage, Date, Home_team, Away_team, Score, Home_goals, Away_goals, Extra_time, Penalties
     """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -107,30 +107,33 @@ def normalize_match_table(df: pd.DataFrame, season_label: str, stage_hint: str =
         elif colmap["stage"] is None and ("round" in cl or "stage" in cl or "group" in cl):
             colmap["stage"] = c
 
-    out = pd.DataFrame()
-    out["season"] = season_label
+    # 🔹 Creamos el DataFrame de salida con el MISMO índice que df
+    out = pd.DataFrame(index=df.index)
 
-    out["date"] = df[colmap["date"]].astype(str) if colmap["date"] else None
-    out["home_team"] = df[colmap["home_team"]].astype(str) if colmap["home_team"] else None
-    out["away_team"] = df[colmap["away_team"]].astype(str) if colmap["away_team"] else None
-    out["score"] = df[colmap["score"]].astype(str) if colmap["score"] else None
-    out["stage"] = (
+    # Así se rellena Season en TODAS las filas correctamente
+    out["Season"] = season_label
+
+    out["Date"] = df[colmap["date"]].astype(str) if colmap["date"] else None
+    out["Home_team"] = df[colmap["home_team"]].astype(str) if colmap["home_team"] else None
+    out["Away_team"] = df[colmap["away_team"]].astype(str) if colmap["away_team"] else None
+    out["Score"] = df[colmap["score"]].astype(str) if colmap["score"] else None
+    out["Stage"] = (
         df[colmap["stage"]].astype(str) if colmap["stage"] else stage_hint
     )
 
     home_goals_list, away_goals_list, extra_time_list, pens_list = [], [], [], []
 
-    for s in out["score"]:
+    for s in out["Score"]:
         hg, ag, et, pe = clean_score(s)
         home_goals_list.append(hg)
         away_goals_list.append(ag)
         extra_time_list.append(et)
         pens_list.append(pe)
 
-    out["home_goals"] = home_goals_list
-    out["away_goals"] = away_goals_list
-    out["extra_time"] = extra_time_list
-    out["penalties"] = pens_list
+    out["Home_goals"] = home_goals_list
+    out["Away_goals"] = away_goals_list
+    out["Extra_time"] = extra_time_list
+    out["Penalties"] = pens_list
 
     return out
 
@@ -139,7 +142,6 @@ def season_to_wiki_title(start_year: int) -> str:
     """
     Convierte un año de inicio de temporada (1992) en el título Wikipedia:
         '1992–93_UEFA_Champions_League'
-    (usa EN DASH '–' entre años)
     """
     end_year_short = str((start_year + 1) % 100).zfill(2)
     season_str = f"{start_year}–{end_year_short}"
@@ -149,8 +151,7 @@ def season_to_wiki_title(start_year: int) -> str:
 
 def scrape_season_matches(start_year: int) -> pd.DataFrame:
     """
-    Scrapea la página de una temporada concreta de la Champions en Wikipedia
-    y devuelve un DF con todos los partidos detectados.
+    Scrapea la página de una temporada concreta de la Champions en Wikipedia.
     """
     title = season_to_wiki_title(start_year)
     url = BASE_WIKI_URL + title
@@ -164,15 +165,16 @@ def scrape_season_matches(start_year: int) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(StringIO(resp.text))
     except ValueError:
         print("    ⚠️ No se han encontrado tablas en esta página.")
         return pd.DataFrame()
 
+    # Season en formato legible
     season_label = title.replace("_", " ")
     match_dfs = []
 
-    for i, df in enumerate(tables):
+    for df in tables:
         if df.empty:
             continue
         if not looks_like_match_table(df):
@@ -180,7 +182,7 @@ def scrape_season_matches(start_year: int) -> pd.DataFrame:
 
         norm = normalize_match_table(df, season_label, stage_hint=None)
 
-        mask_valid = norm["home_team"].notna() | norm["away_team"].notna()
+        mask_valid = norm["Home_team"].notna() | norm["Away_team"].notna()
         norm = norm[mask_valid]
 
         if not norm.empty:
@@ -194,15 +196,29 @@ def scrape_season_matches(start_year: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def extract_season_year(season_str: str):
+    """
+    De '1992–93 UEFA Champions League' saca 1992 como entero.
+    """
+    if not isinstance(season_str, str):
+        return None
+    m = re.match(r"^(\d{4})", season_str)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
 if __name__ == "__main__":
-    # Temporadas desde 1992–93 hasta 2024–25 (start_year = 1992..2024)
+    # Temporadas desde 1992–93 hasta 2025–26 (start_year = 1992..2025)
     START_YEARS = list(range(1992, 2026))
 
     all_seasons = []
 
     print("📊 Scrapeando partidos de Champions en Wikipedia...")
 
-    # Crear carpeta data si no existe
     os.makedirs("data", exist_ok=True)
 
     for y in START_YEARS:
@@ -210,38 +226,50 @@ if __name__ == "__main__":
         df_season = scrape_season_matches(y)
         if not df_season.empty:
             all_seasons.append(df_season)
-        time.sleep(1)  # para no abusar de Wikipedia
+        time.sleep(1)
 
     if all_seasons:
         matches = pd.concat(all_seasons, ignore_index=True)
 
-        # Filtrado básico de filas sin equipos ni goles
+        # Convertimos goles a numéricos
+        matches["Home_goals"] = pd.to_numeric(matches["Home_goals"], errors="coerce")
+        matches["Away_goals"] = pd.to_numeric(matches["Away_goals"], errors="coerce")
+
+        # Filtrado básico
         mask_ok = (
-            matches["home_team"].notna() &
-            matches["away_team"].notna() &
-            (matches["home_goals"].notna() | matches["away_goals"].notna())
+            matches["Home_team"].notna() &
+            matches["Away_team"].notna() &
+            (matches["Home_goals"].notna() | matches["Away_goals"].notna())
         )
         matches = matches[mask_ok]
 
+        # ➕ Season_year arriba del todo
+        matches["Season_year"] = matches["Season"].apply(extract_season_year)
+
+         # 🔥 DROP DE LAS COLUMNAS VACÍAS
+        matches.drop(columns=["Date", "Stage"], errors="ignore", inplace=True)
+
+        # Reordenar columnas
         col_order = [
-            "season",
-            "stage",
-            "date",
-            "home_team",
-            "away_team",
-            "score",
-            "home_goals",
-            "away_goals",
-            "extra_time",
-            "penalties",
+            "Season_year",
+            "Season",
+            "Stage",
+            "Date",
+            "Home_team",
+            "Away_team",
+            "Score",
+            "Home_goals",
+            "Away_goals",
+            "Extra_time",
+            "Penalties",
         ]
         base_cols = [c for c in col_order if c in matches.columns]
         other_cols = [c for c in matches.columns if c not in base_cols]
         matches = matches[base_cols + other_cols]
 
-        file_name = "data/ucl_matches_wikipedia_1992_2025.csv"
-        matches.to_csv(file_name, index=False)
-        print(f"\n✅ CSV de partidos guardado en: {file_name}")
+        out_file = "data/ucl_matches_wikipedia_final.csv"
+        matches.to_csv(out_file, index=False)
+        print(f"\n✅ CSV de partidos guardado en: {out_file}")
         print(f"   Nº filas: {matches.shape[0]}, Nº columnas: {matches.shape[1]}")
     else:
         print("\n❌ No se han obtenido datos de partidos.")
