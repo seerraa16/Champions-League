@@ -1,0 +1,8 @@
+Ejecutar en orden los siguientes comandos 
+
+python ingest.py
+
+python build_index.py
+
+python query_rag.py
+
